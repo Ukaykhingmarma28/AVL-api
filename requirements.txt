@@ -1,0 +1,6 @@
+# api_server.py only. The listener stays stdlib-only; the sink needs
+# requirements-db.txt. asyncpg rather than psycopg2 because the API is
+# asyncio and LISTEN/NOTIFY needs a connection that can wait without a thread.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+asyncpg>=0.29
