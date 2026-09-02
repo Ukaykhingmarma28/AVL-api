@@ -45,7 +45,7 @@ All endpoints except `/health` require the API key when `API_KEY` is set.
 | GET | `/health` | database status, realtime mode, connected clients |
 | GET | `/api/vehicles` | latest record per device, one array |
 | GET | `/api/vehicles/{imei}` | latest record for one device, 404 if unknown |
-| GET | `/api/vehicles/{imei}/history` | records oldest first; `from`, `to` (ISO 8601, default last 24 h), `fix_only` (default true), `limit` (default 1000, max 10000) |
+| GET | `/api/vehicles/{imei}/history` | records oldest first; `from`, `to` (ISO 8601, default last 24 h), `fix_only` (default true), `limit` (default 1000, max 10000), `order` (`asc` default, `desc`) |
 | WS | `/api/stream/ws` | snapshot, then one message per new record; `?imei=` filters |
 | GET | `/api/stream/sse` | the same over Server-Sent Events |
 

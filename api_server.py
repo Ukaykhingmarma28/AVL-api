@@ -122,7 +122,7 @@ _HISTORY = f"""
     FROM avl_records
     WHERE imei = $1 AND ts >= $2 AND ts < $3
       AND ($4::boolean IS FALSE OR fix_valid)
-    ORDER BY ts
+    ORDER BY ts {{order}}
     LIMIT $5
 """
 
@@ -444,15 +444,19 @@ async def get_history(
                                       description="ISO 8601, default now"),
     fix_only: bool = Query(True, description="drop records without a GPS fix"),
     limit: int = Query(1000, ge=1, le=10000),
+    order: str = Query("asc", pattern="^(asc|desc)$",
+                       description="asc for a track; desc with limit=1 for the last fix"),
 ) -> List[Dict[str, Any]]:
-    """Records for one device, oldest first. Draw this as the track."""
+    """Records for one device. Oldest first by default: draw this as the track.
+    order=desc&limit=1 answers "where was it last seen with a fix"."""
     now = datetime.now(timezone.utc)
     until = _utc(until) or now
     since = _utc(since) or until - timedelta(hours=24)
     if since >= until:
         raise HTTPException(400, "'from' must be earlier than 'to'")
+    sql = _HISTORY.format(order="DESC" if order == "desc" else "ASC")
     async with request.app.state.pool.acquire() as conn:
-        rows = await conn.fetch(_HISTORY, imei, since, until, fix_only, limit)
+        rows = await conn.fetch(sql, imei, since, until, fix_only, limit)
     return [record_to_json(r) for r in rows]
 
 

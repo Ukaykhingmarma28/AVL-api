@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fleet live</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Cpath d=%27M12 2 L20 20 L12 16 L4 20 Z%27 fill=%27%2322c55e%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root {
@@ -140,9 +141,22 @@
 // ---------------------------------------------------------------------------
 // Config: same origin by default, overridable from the gear menu.
 // ---------------------------------------------------------------------------
+// Where the API lives when this page is NOT served by the API itself (opened
+// from disk, or hosted somewhere else). Served by the API, same origin wins.
+const DEFAULT_API = "https://avl-api-production-035d.up.railway.app";
+
+const store = {
+  get(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+const servedByApi = location.protocol.startsWith("http") && !store.get("apiBase");
 const cfg = {
-  get base() { return (localStorage.getItem("apiBase") || "").replace(/\/$/, ""); },
-  get key()  { return localStorage.getItem("apiKey") || ""; },
+  get base() {
+    const saved = store.get("apiBase").replace(/\/$/, "");
+    if (saved) return saved;
+    return location.protocol.startsWith("http") ? "" : DEFAULT_API;
+  },
+  get key() { return store.get("apiKey"); },
 };
 const withKey = url => cfg.key ? `${url}${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(cfg.key)}` : url;
 async function get(path) {
@@ -156,6 +170,8 @@ async function get(path) {
 // ---------------------------------------------------------------------------
 const fleet = new Map();      // imei -> latest record
 const markers = new Map();    // imei -> L.marker
+const lastFix = new Map();    // imei -> {lat, lon, ts}: where it was last seen with a fix
+const fixLookups = new Set(); // imeis with a last-fix request in flight
 let selected = null;          // imei
 let follow = false;
 let trail = null;             // L.polyline for the selected vehicle
@@ -203,32 +219,63 @@ function iconFor(r) {
   return L.divIcon({ className: "veh" + (r.imei === selected ? " selected" : ""), html: moving ? arrow : dotc, iconSize: [0, 0] });
 }
 
-function upsertMarker(r) {
-  if (!r.fix_valid) {
-    const m = markers.get(r.imei);
-    if (m) { m.setIcon(iconFor(r)); m.setOpacity(0.5); }
-    return;
-  }
-  const pos = [r.latitude, r.longitude];
+// Where to draw a vehicle: its current fix, else the last place it had one.
+function positionOf(r) {
+  if (r.fix_valid) return [r.latitude, r.longitude];
+  const f = lastFix.get(r.imei);
+  return f ? [f.lat, f.lon] : null;
+}
+
+function tooltipFor(r) {
+  if (r.fix_valid) return r.imei;
+  const f = lastFix.get(r.imei);
+  return f ? `${r.imei}<br><small>no fix · last seen here ${timeAgo(f.ts)}</small>` : r.imei;
+}
+
+function placeMarker(r) {
+  const pos = positionOf(r);
+  if (!pos) return;
   let m = markers.get(r.imei);
   if (!m) {
     m = L.marker(pos, { icon: iconFor(r) }).addTo(map);
-    m.bindTooltip(r.imei, { direction: "top", offset: [0, -10] });
+    m.bindTooltip("", { direction: "top", offset: [0, -10] });
     m.on("click", () => select(r.imei));
     markers.set(r.imei, m);
   } else {
     m.setLatLng(pos);
     m.setIcon(iconFor(r));
-    m.setOpacity(1);
   }
-  if (r.imei === selected) {
+  m.setTooltipContent(tooltipFor(r));
+  m.setOpacity(r.fix_valid ? 1 : 0.55);
+}
+
+function upsertMarker(r) {
+  if (r.fix_valid) {
+    lastFix.set(r.imei, { lat: r.latitude, lon: r.longitude, ts: r.ts });
+  } else if (!lastFix.has(r.imei) && !fixLookups.has(r.imei)) {
+    // No fix now and nothing remembered: ask the API where it was last seen.
+    fixLookups.add(r.imei);
+    const from = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
+    get(`/api/vehicles/${r.imei}/history?from=${from}&limit=1&order=desc`)
+      .then(rows => {
+        if (rows.length) lastFix.set(r.imei, { lat: rows[0].latitude, lon: rows[0].longitude, ts: rows[0].ts });
+        const cur = fleet.get(r.imei);
+        if (cur) placeMarker(cur);
+        if (!fitted && markers.size) { fitAll(); fitted = true; }
+      })
+      .catch(e => toast(`Last position for ${r.imei} failed: ${e.message}`))
+      .finally(() => fixLookups.delete(r.imei));
+  }
+  placeMarker(r);
+  const pos = positionOf(r);
+  if (r.imei === selected && r.fix_valid && pos) {
     if (trail) trail.addLatLng(pos);
     if (follow) map.panTo(pos, { animate: true });
   }
 }
 
 function fitAll() {
-  const pts = [...fleet.values()].filter(r => r.fix_valid).map(r => [r.latitude, r.longitude]);
+  const pts = [...fleet.values()].map(positionOf).filter(Boolean);
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 15 });
 }
 
@@ -281,7 +328,7 @@ function renderDetail() {
     <div class="kv">
       <div><span>Updated</span><span title="${r.ts}">${timeAgo(r.ts)}</span></div>
       <div><span>Received</span><span title="${r.received_at}">${timeAgo(r.received_at)}</span></div>
-      <div><span>Position</span><span>${r.fix_valid ? `${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}` : "no fix"}</span></div>
+      <div><span>Position</span><span>${r.fix_valid ? `${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}` : (lastFix.get(r.imei) ? `no fix · last ${timeAgo(lastFix.get(r.imei).ts)}` : "no fix")}</span></div>
       <div><span>Speed</span><span>${r.speed_kmh ?? 0} km/h</span></div>
       <div><span>Heading</span><span>${r.angle_deg ?? "–"}°</span></div>
       <div><span>Altitude</span><span>${r.altitude_m ?? "–"} m</span></div>
@@ -299,7 +346,7 @@ function renderDetail() {
     </div>
     <details><summary>All IO elements (${Object.keys(r.io || {}).length})</summary>
       <table class="io">${ioRows}</table></details>`;
-  document.getElementById("btnFollow").onclick = () => { follow = !follow; renderDetail(); if (follow && r.fix_valid) map.panTo([r.latitude, r.longitude]); };
+  document.getElementById("btnFollow").onclick = () => { follow = !follow; renderDetail(); const p = positionOf(r); if (follow && p) map.panTo(p); };
   document.getElementById("btnTrail").onclick = () => loadTrail(r.imei);
   document.getElementById("btnClose").onclick = () => select(null);
 }
@@ -311,7 +358,8 @@ function select(imei) {
   if (trail) { trail.remove(); trail = null; }
   for (const id of [prev, imei]) { const r = id && fleet.get(id); if (r) upsertMarker(r); }
   const r = imei && fleet.get(imei);
-  if (r && r.fix_valid) map.panTo([r.latitude, r.longitude]);
+  const pos = r && positionOf(r);
+  if (pos) map.panTo(pos);
   renderList(); renderDetail();
 }
 
@@ -346,7 +394,7 @@ function connect() {
   es.addEventListener("snapshot", e => {
     const v = JSON.parse(e.data).vehicles;
     v.forEach(apply);
-    if (!fitted && v.length) { fitAll(); fitted = true; }
+    if (!fitted && markers.size) { fitAll(); fitted = true; }
     renderList(); renderCounts(); renderDetail();
     setConn("live", `live · ${v.length} vehicle${v.length === 1 ? "" : "s"}`);
   });
@@ -354,7 +402,9 @@ function connect() {
     apply(JSON.parse(e.data).record);
     renderList(); renderCounts(); renderDetail();
   });
-  es.onerror = () => setConn("connecting", "reconnecting…");
+  es.onerror = () => {
+    setConn("connecting", fleet.size ? "reconnecting…" : `cannot reach ${cfg.base || location.origin}`);
+  };
 }
 
 // Ages tick even when nothing arrives, so vehicles can go offline.
@@ -368,17 +418,18 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 const settings = document.getElementById("settings");
 document.getElementById("gear").onclick = () => {
-  document.getElementById("apiBase").value = cfg.base;
+  document.getElementById("apiBase").value = store.get("apiBase");
+  document.getElementById("apiBase").placeholder = servedByApi ? "same origin" : DEFAULT_API;
   document.getElementById("apiKey").value = cfg.key;
   settings.classList.add("open");
 };
 document.getElementById("cancelSettings").onclick = () => settings.classList.remove("open");
 document.getElementById("settingsForm").onsubmit = e => {
   e.preventDefault();
-  localStorage.setItem("apiBase", document.getElementById("apiBase").value.trim());
-  localStorage.setItem("apiKey", document.getElementById("apiKey").value.trim());
+  store.set("apiBase", document.getElementById("apiBase").value.trim());
+  store.set("apiKey", document.getElementById("apiKey").value.trim());
   settings.classList.remove("open");
-  fleet.clear(); markers.forEach(m => m.remove()); markers.clear(); fitted = false; select(null);
+  fleet.clear(); markers.forEach(m => m.remove()); markers.clear(); lastFix.clear(); fitted = false; select(null);
   connect();
 };
 let toastTimer;
@@ -388,16 +439,7 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
 }
 
-// Opened straight from disk with no API configured: there is no "same origin"
-// to talk to, so ask for the URL instead of silently failing to connect.
-if (location.protocol === "file:" && !cfg.base) {
-  setConn("", "no API configured");
-  document.getElementById("apiBase").placeholder = "https://your-api.up.railway.app";
-  settings.classList.add("open");
-  document.getElementById("apiBase").focus();
-} else {
-  connect();
-}
+connect();
 </script>
 </body>
 </html>

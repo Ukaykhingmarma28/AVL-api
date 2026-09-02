@@ -305,6 +305,9 @@ Rules that matter:
 - `fix_only=true` (the default) skips records with no GPS fix, so the
   polyline has no `null` holes. Pass `fix_only=false` if you want to show
   "no fix" gaps or read IO values from those periods.
+- `order=desc` reverses it. `order=desc&limit=1` is the cheap way to ask
+  "where was this vehicle last seen with a fix", which is what you want to
+  draw when the latest record has `fix_valid: false`.
 - `limit` caps at 10000. A tracker sending every second produces 86400
   points a day, so page through longer windows: fetch, take the last
   point's `ts` as the next `from`, repeat until fewer than `limit` rows come
