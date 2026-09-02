@@ -8,6 +8,7 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin teltonika
 
 WORKDIR /opt/teltonika
 COPY api_server.py ./
+COPY static ./static
 
 # Railway injects PORT itself; the default only matters for docker-compose.
 ENV PORT=8000 \

@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet live</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #0f1419; --panel: #161c24; --panel-2: #1d2530; --line: #273240;
+    --text: #e6edf3; --muted: #8b98a8; --accent: #3b82f6;
+    --moving: #22c55e; --idling: #f59e0b; --parked: #60a5fa; --offline: #6b7280; --nofix: #a855f7;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: grid; grid-template-rows: 52px 1fr; grid-template-columns: 320px 1fr;
+    grid-template-areas: "head head" "side map";
+  }
+  header {
+    grid-area: head; display: flex; align-items: center; gap: 16px; padding: 0 16px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .conn { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--offline); }
+  .dot.live { background: var(--moving); box-shadow: 0 0 6px var(--moving); }
+  .dot.connecting { background: var(--idling); }
+  .counts { display: flex; gap: 12px; margin-left: auto; font-size: 13px; }
+  .counts span { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+  .counts b { color: var(--text); }
+  .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  button, input {
+    font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); border-color: var(--accent); }
+
+  aside {
+    grid-area: side; display: flex; flex-direction: column; min-height: 0;
+    background: var(--panel); border-right: 1px solid var(--line);
+  }
+  .search { padding: 10px; border-bottom: 1px solid var(--line); }
+  .search input { width: 100%; }
+  #list { overflow-y: auto; flex: 1; min-height: 0; }
+  .row {
+    display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: center;
+    padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  .row:hover { background: var(--panel-2); }
+  .row.selected { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+  .row .bar { width: 10px; height: 34px; border-radius: 3px; }
+  .row .name { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .row .sub { color: var(--muted); font-size: 12px; }
+  .row .spd { text-align: right; font-variant-numeric: tabular-nums; }
+  .row .spd small { display: block; color: var(--muted); font-size: 11px; }
+  .empty { padding: 30px 16px; color: var(--muted); text-align: center; }
+
+  #detail { border-top: 1px solid var(--line); padding: 12px; display: none; max-height: 45%; overflow-y: auto; }
+  #detail.open { display: block; }
+  #detail h2 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  #detail h2 .chip { font-size: 11px; padding: 2px 7px; border-radius: 10px; color: #000; font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv div { display: flex; justify-content: space-between; border-bottom: 1px dashed var(--line); padding: 3px 0; }
+  .kv span:first-child { color: var(--muted); }
+  .actions { display: flex; gap: 6px; margin: 10px 0; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  table.io { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  table.io td { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  table.io td:first-child { color: var(--muted); width: 36px; }
+  table.io td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+  #map { grid-area: map; background: #0b0e12; }
+  .leaflet-container { font: inherit; }
+  .veh { width: 0; height: 0; }
+  .veh svg { position: absolute; left: -12px; top: -12px; transition: transform .6s linear; filter: drop-shadow(0 1px 2px #000); }
+  .veh.selected svg { filter: drop-shadow(0 0 6px #fff); }
+  .leaflet-tooltip { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+  .leaflet-tooltip-top:before { border-top-color: var(--line); }
+
+  #settings {
+    position: fixed; inset: 0; background: #0009; display: none; align-items: center; justify-content: center;
+  }
+  #settings.open { display: flex; }
+  #settings form {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; width: 380px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #settings label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  #settings input { width: 100%; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--panel-2);
+    border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; font-size: 13px; display: none;
+  }
+  .toast.show { display: block; }
+
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 52px 1fr 45%; grid-template-areas: "head" "map" "side"; }
+    aside { border-right: 0; border-top: 1px solid var(--line); }
+    .counts span i { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Fleet live</h1>
+  <div class="conn"><span class="dot" id="dot"></span><span id="connText">connecting</span></div>
+  <div class="counts" id="counts"></div>
+  <button id="gear" title="API settings">⚙</button>
+</header>
+
+<aside>
+  <div class="search"><input id="q" placeholder="Search IMEI" autocomplete="off"></div>
+  <div id="list"><div class="empty">Waiting for data…</div></div>
+  <div id="detail"></div>
+</aside>
+
+<div id="map"></div>
+
+<div id="settings">
+  <form id="settingsForm">
+    <strong>API settings</strong>
+    <label>API base URL <input id="apiBase" placeholder="same origin"></label>
+    <label>API key <input id="apiKey" placeholder="leave empty if the server has no API_KEY"></label>
+    <div class="hint">Stored in this browser only. Leave the URL empty when this page is served by the API itself.</div>
+    <div class="actions"><button type="submit">Save &amp; reconnect</button><button type="button" id="cancelSettings">Cancel</button></div>
+  </form>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Config: same origin by default, overridable from the gear menu.
+// ---------------------------------------------------------------------------
+const cfg = {
+  get base() { return (localStorage.getItem("apiBase") || "").replace(/\/$/, ""); },
+  get key()  { return localStorage.getItem("apiKey") || ""; },
+};
+const withKey = url => cfg.key ? `${url}${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(cfg.key)}` : url;
+async function get(path) {
+  const r = await fetch(cfg.base + path, { headers: cfg.key ? { "X-API-Key": cfg.key } : {} });
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+const fleet = new Map();      // imei -> latest record
+const markers = new Map();    // imei -> L.marker
+let selected = null;          // imei
+let follow = false;
+let trail = null;             // L.polyline for the selected vehicle
+let fitted = false;
+
+const OFFLINE_AFTER = 15 * 60;   // seconds without a record
+const io = (r, id) => r.io && r.io[String(id)];
+const ioValue = (r, id) => { const e = io(r, id); return e ? e.value : null; };
+const ioState = (r, id) => { const e = io(r, id); return e ? (e.state || null) : null; };
+
+function status(r, now = Date.now()) {
+  const age = (now - Date.parse(r.ts)) / 1000;
+  if (age > OFFLINE_AFTER) return "offline";
+  if (!r.fix_valid) return "nofix";
+  const ign = ioState(r, 239) === "on";
+  if (ign && r.speed_kmh > 0) return "moving";
+  if (ign) return "idling";
+  return "parked";
+}
+const COLOR = { moving: "#22c55e", idling: "#f59e0b", parked: "#60a5fa", offline: "#6b7280", nofix: "#a855f7" };
+const LABEL = { moving: "Moving", idling: "Idling", parked: "Parked", offline: "Offline", nofix: "No fix" };
+
+function timeAgo(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return `${Math.round(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+const map = L.map("map", { zoomControl: true }).setView([23.78, 90.4], 11);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap &copy; CARTO",
+}).addTo(map);
+
+function iconFor(r) {
+  const c = COLOR[status(r)];
+  const arrow = `<svg width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(${r.angle_deg || 0}deg)">
+      <path d="M12 2 L20 20 L12 16 L4 20 Z" fill="${c}" stroke="#000" stroke-width="1"/></svg>`;
+  const dotc = `<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="${c}" stroke="#000" stroke-width="1"/></svg>`;
+  const moving = status(r) === "moving";
+  return L.divIcon({ className: "veh" + (r.imei === selected ? " selected" : ""), html: moving ? arrow : dotc, iconSize: [0, 0] });
+}
+
+function upsertMarker(r) {
+  if (!r.fix_valid) {
+    const m = markers.get(r.imei);
+    if (m) { m.setIcon(iconFor(r)); m.setOpacity(0.5); }
+    return;
+  }
+  const pos = [r.latitude, r.longitude];
+  let m = markers.get(r.imei);
+  if (!m) {
+    m = L.marker(pos, { icon: iconFor(r) }).addTo(map);
+    m.bindTooltip(r.imei, { direction: "top", offset: [0, -10] });
+    m.on("click", () => select(r.imei));
+    markers.set(r.imei, m);
+  } else {
+    m.setLatLng(pos);
+    m.setIcon(iconFor(r));
+    m.setOpacity(1);
+  }
+  if (r.imei === selected) {
+    if (trail) trail.addLatLng(pos);
+    if (follow) map.panTo(pos, { animate: true });
+  }
+}
+
+function fitAll() {
+  const pts = [...fleet.values()].filter(r => r.fix_valid).map(r => [r.latitude, r.longitude]);
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 15 });
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+const listEl = document.getElementById("list");
+const qEl = document.getElementById("q");
+
+function renderList() {
+  const q = qEl.value.trim();
+  const rows = [...fleet.values()]
+    .filter(r => !q || r.imei.includes(q))
+    .sort((a, b) => a.imei.localeCompare(b.imei));
+  if (!rows.length) { listEl.innerHTML = `<div class="empty">${fleet.size ? "No match" : "Waiting for data…"}</div>`; return; }
+  listEl.innerHTML = rows.map(r => {
+    const s = status(r);
+    return `<div class="row ${r.imei === selected ? "selected" : ""}" data-imei="${r.imei}">
+      <div class="bar" style="background:${COLOR[s]}"></div>
+      <div><div class="name">${r.imei}</div><div class="sub">${LABEL[s]} · ${timeAgo(r.ts)}</div></div>
+      <div class="spd">${r.speed_kmh ?? 0}<small>km/h</small></div>
+    </div>`;
+  }).join("");
+}
+listEl.addEventListener("click", e => {
+  const row = e.target.closest(".row");
+  if (row) select(row.dataset.imei);
+});
+qEl.addEventListener("input", renderList);
+
+function renderCounts() {
+  const c = { moving: 0, idling: 0, parked: 0, offline: 0, nofix: 0 };
+  for (const r of fleet.values()) c[status(r)]++;
+  document.getElementById("counts").innerHTML = Object.keys(c)
+    .map(k => `<span><i class="swatch" style="background:${COLOR[k]}"></i><b>${c[k]}</b> ${LABEL[k]}</span>`).join("");
+}
+
+const detailEl = document.getElementById("detail");
+function renderDetail() {
+  const r = selected && fleet.get(selected);
+  if (!r) { detailEl.classList.remove("open"); return; }
+  const s = status(r);
+  const ioRows = Object.values(r.io || {})
+    .sort((a, b) => a.id - b.id)
+    .map(e => `<tr><td>${e.id}</td><td>${e.name || "<i>unknown</i>"}</td><td>${e.state ?? e.value}${e.unit ? " " + e.unit : ""}</td></tr>`)
+    .join("");
+  detailEl.classList.add("open");
+  detailEl.innerHTML = `
+    <h2>${r.imei} <span class="chip" style="background:${COLOR[s]}">${LABEL[s]}</span></h2>
+    <div class="kv">
+      <div><span>Updated</span><span title="${r.ts}">${timeAgo(r.ts)}</span></div>
+      <div><span>Received</span><span title="${r.received_at}">${timeAgo(r.received_at)}</span></div>
+      <div><span>Position</span><span>${r.fix_valid ? `${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}` : "no fix"}</span></div>
+      <div><span>Speed</span><span>${r.speed_kmh ?? 0} km/h</span></div>
+      <div><span>Heading</span><span>${r.angle_deg ?? "–"}°</span></div>
+      <div><span>Altitude</span><span>${r.altitude_m ?? "–"} m</span></div>
+      <div><span>Satellites</span><span>${r.satellites ?? "–"}</span></div>
+      <div><span>Ignition</span><span>${ioState(r, 239) ?? "–"}</span></div>
+      <div><span>Battery</span><span>${ioValue(r, 66) ?? "–"} V</span></div>
+      <div><span>GSM</span><span>${ioValue(r, 21) ?? "–"}/5</span></div>
+      <div><span>Event IO</span><span>${r.event_io_id}</span></div>
+      <div><span>Priority</span><span>${["low", "high", "panic"][r.priority] ?? r.priority}</span></div>
+    </div>
+    <div class="actions">
+      <button id="btnFollow" class="${follow ? "active" : ""}">Follow</button>
+      <button id="btnTrail">Trail 2h</button>
+      <button id="btnClose">Close</button>
+    </div>
+    <details><summary>All IO elements (${Object.keys(r.io || {}).length})</summary>
+      <table class="io">${ioRows}</table></details>`;
+  document.getElementById("btnFollow").onclick = () => { follow = !follow; renderDetail(); if (follow && r.fix_valid) map.panTo([r.latitude, r.longitude]); };
+  document.getElementById("btnTrail").onclick = () => loadTrail(r.imei);
+  document.getElementById("btnClose").onclick = () => select(null);
+}
+
+function select(imei) {
+  const prev = selected;
+  selected = imei;
+  follow = false;
+  if (trail) { trail.remove(); trail = null; }
+  for (const id of [prev, imei]) { const r = id && fleet.get(id); if (r) upsertMarker(r); }
+  const r = imei && fleet.get(imei);
+  if (r && r.fix_valid) map.panTo([r.latitude, r.longitude]);
+  renderList(); renderDetail();
+}
+
+async function loadTrail(imei) {
+  const from = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+  try {
+    const pts = await get(`/api/vehicles/${imei}/history?from=${from}&limit=10000`);
+    if (trail) trail.remove();
+    trail = L.polyline(pts.map(p => [p.latitude, p.longitude]), { color: "#3b82f6", weight: 3, opacity: 0.8 }).addTo(map);
+    if (pts.length) map.fitBounds(trail.getBounds().pad(0.2)); else toast("No fixes in the last 2 hours");
+  } catch (e) { toast("History failed: " + e.message); }
+}
+
+// ---------------------------------------------------------------------------
+// Live stream (SSE: reconnects by itself, snapshot on every connect)
+// ---------------------------------------------------------------------------
+let es = null;
+const dot = document.getElementById("dot"), connText = document.getElementById("connText");
+function setConn(state, text) { dot.className = "dot " + state; connText.textContent = text; }
+
+function apply(r) {
+  const cur = fleet.get(r.imei);
+  if (cur && cur.ts > r.ts) return;      // backlog upload: do not move backwards
+  fleet.set(r.imei, r);
+  upsertMarker(r);
+}
+
+function connect() {
+  if (es) es.close();
+  setConn("connecting", "connecting");
+  es = new EventSource(withKey(`${cfg.base}/api/stream/sse`));
+  es.addEventListener("snapshot", e => {
+    const v = JSON.parse(e.data).vehicles;
+    v.forEach(apply);
+    if (!fitted && v.length) { fitAll(); fitted = true; }
+    renderList(); renderCounts(); renderDetail();
+    setConn("live", `live · ${v.length} vehicle${v.length === 1 ? "" : "s"}`);
+  });
+  es.addEventListener("record", e => {
+    apply(JSON.parse(e.data).record);
+    renderList(); renderCounts(); renderDetail();
+  });
+  es.onerror = () => setConn("connecting", "reconnecting…");
+}
+
+// Ages tick even when nothing arrives, so vehicles can go offline.
+setInterval(() => {
+  for (const r of fleet.values()) { const m = markers.get(r.imei); if (m) m.setIcon(iconFor(r)); }
+  renderList(); renderCounts(); renderDetail();
+}, 30000);
+
+// ---------------------------------------------------------------------------
+// Settings + toast
+// ---------------------------------------------------------------------------
+const settings = document.getElementById("settings");
+document.getElementById("gear").onclick = () => {
+  document.getElementById("apiBase").value = cfg.base;
+  document.getElementById("apiKey").value = cfg.key;
+  settings.classList.add("open");
+};
+document.getElementById("cancelSettings").onclick = () => settings.classList.remove("open");
+document.getElementById("settingsForm").onsubmit = e => {
+  e.preventDefault();
+  localStorage.setItem("apiBase", document.getElementById("apiBase").value.trim());
+  localStorage.setItem("apiKey", document.getElementById("apiKey").value.trim());
+  settings.classList.remove("open");
+  fleet.clear(); markers.forEach(m => m.remove()); markers.clear(); fitted = false; select(null);
+  connect();
+};
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+connect();
+</script>
+</body>
+</html>

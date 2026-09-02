@@ -13,6 +13,11 @@ device ──▶ listener ──▶ TimescaleDB ──▶ api_server.py ──�
                               └── pg_notify ─┘   (or a 2 s poll, see below)
 ```
 
+**Live map included.** Open the API's root URL in a browser and you get a
+working fleet map: every vehicle as a marker, status colours, a detail
+panel, and a two-hour trail. It is `static/index.html`, one file with no
+build step, and a starting point for your own frontend.
+
 Building a frontend on it? Read **[docs/USAGE.md](docs/USAGE.md)**: the
 record fields explained, and working code for a live map, vehicle panel,
 history replay, alerts and reconnect handling.
@@ -36,6 +41,7 @@ All endpoints except `/health` require the API key when `API_KEY` is set.
 
 | Method | Path | Returns |
 |---|---|---|
+| GET | `/` | the live map page |
 | GET | `/health` | database status, realtime mode, connected clients |
 | GET | `/api/vehicles` | latest record per device, one array |
 | GET | `/api/vehicles/{imei}` | latest record for one device, 404 if unknown |

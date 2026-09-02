@@ -5,6 +5,8 @@ HTTP + WebSocket API over avl_records, for a tracking frontend.
     set -a; . ./.env; set +a
     .venv/bin/python api_server.py            # http://127.0.0.1:8000/docs
 
+A live map frontend is served at /  (static/index.html).
+
 REST
     GET /health
     GET /api/vehicles                          latest record per device
@@ -57,7 +59,9 @@ import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi import WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+
+from pathlib import Path
 
 log = logging.getLogger("teltonika.api")
 
@@ -377,6 +381,18 @@ def _authorized(headers, query) -> bool:
 async def require_key(request: Request) -> None:
     if not _authorized(request.headers, request.query_params):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing API key")
+
+
+# -- frontend --------------------------------------------------------------
+
+_STATIC = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """The live map. Served from the same origin as the API so the browser
+    needs no CORS and the key (if any) is typed into the page's settings."""
+    return FileResponse(_STATIC / "index.html")
 
 
 # -- REST ------------------------------------------------------------------
