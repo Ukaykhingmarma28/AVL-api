@@ -388,7 +388,16 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
 }
 
-connect();
+// Opened straight from disk with no API configured: there is no "same origin"
+// to talk to, so ask for the URL instead of silently failing to connect.
+if (location.protocol === "file:" && !cfg.base) {
+  setConn("", "no API configured");
+  document.getElementById("apiBase").placeholder = "https://your-api.up.railway.app";
+  settings.classList.add("open");
+  document.getElementById("apiBase").focus();
+} else {
+  connect();
+}
 </script>
 </body>
 </html>
