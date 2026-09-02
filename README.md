@@ -13,6 +13,10 @@ device ──▶ listener ──▶ TimescaleDB ──▶ api_server.py ──�
                               └── pg_notify ─┘   (or a 2 s poll, see below)
 ```
 
+Building a frontend on it? Read **[docs/USAGE.md](docs/USAGE.md)**: the
+record fields explained, and working code for a live map, vehicle panel,
+history replay, alerts and reconnect handling.
+
 ## Run it locally
 
 ```bash
